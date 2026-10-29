@@ -6,9 +6,11 @@
 #include <ArduinoJson.h>
 #include <vector>
 #include "webpage.h"
+#include "scanner_page.h"
 #include "BleManager.h"
 #include "PayloadRunner.h"
 #include "WifiManager.h"
+#include "BleScanner.h"
 
 class WebManager {
 public:
@@ -22,14 +24,16 @@ public:
         logs.push_back(msg);
     }
 
-    void begin(BleManager* ble, PayloadRunner* runner, WifiManager* wifi) {
+    void begin(BleManager* ble, PayloadRunner* runner, WifiManager* wifi, BleScanner* scanner = nullptr) {
         pBle = ble;
         pRunner = runner;
         pWifi = wifi;
+        pScanner = scanner;
 
         addLog("Boot complete. PhantomBLE firmware ready.");
         addLog("ESP32 DevKit 38-pin target initialized.");
 
+        // --- Original routes (unchanged) ---
         server.on("/", HTTP_GET, [this]() {
             server.sendHeader("Content-Encoding", "gzip");
             server.send_P(200, "text/html", (const char*)WEBPAGE_GZ, WEBPAGE_GZ_LEN);
@@ -41,6 +45,23 @@ public:
 
         server.on("/api/control", HTTP_POST, [this]() {
             handleControl();
+        });
+
+        // --- Scanner routes (new) ---
+        server.on("/scanner", HTTP_GET, [this]() {
+            server.send(200, "text/html", SCANNER_PAGE);
+        });
+
+        server.on("/api/scan", HTTP_POST, [this]() {
+            handleScanControl();
+        });
+
+        server.on("/api/scan/results", HTTP_GET, [this]() {
+            handleScanResults();
+        });
+
+        server.on("/api/scan/clone", HTTP_POST, [this]() {
+            handleScanClone();
         });
 
         server.onNotFound([this]() {
@@ -60,7 +81,9 @@ private:
     BleManager* pBle = nullptr;
     PayloadRunner* pRunner = nullptr;
     WifiManager* pWifi = nullptr;
+    BleScanner* pScanner = nullptr;
 
+    // --- Original handlers (unchanged) ---
     void handleStatus() {
         JsonDocument doc;
         doc["ready"] = true;
@@ -175,6 +198,107 @@ private:
         } else {
             server.send(400, "text/plain", "Unknown action");
         }
+    }
+
+    // --- Scanner handlers (new) ---
+
+    void handleScanControl() {
+        if (!server.hasArg("plain")) {
+            server.send(400, "application/json", "{\"ok\":false,\"error\":\"Missing body\"}");
+            return;
+        }
+        JsonDocument doc;
+        DeserializationError err = deserializeJson(doc, server.arg("plain"));
+        if (err) {
+            server.send(400, "application/json", "{\"ok\":false,\"error\":\"Invalid JSON\"}");
+            return;
+        }
+
+        const char* action = doc["action"];
+        if (!action) {
+            server.send(400, "application/json", "{\"ok\":false,\"error\":\"Missing action\"}");
+            return;
+        }
+
+        if (strcmp(action, "start") == 0) {
+            uint32_t dur = doc["duration"] | 10;
+            if (dur < 3) dur = 3;
+            if (dur > 30) dur = 30;
+            // Must stop advertising before scanning (shared radio)
+            if (pBle && pBle->phase != "idle") pBle->stopAdvertising();
+            if (pScanner) pScanner->startScan(dur);
+            addLog("BLE scan started (" + String(dur) + "s)");
+            server.send(200, "application/json", "{\"ok\":true,\"message\":\"Scan started\"}");
+        } else if (strcmp(action, "stop") == 0) {
+            if (pScanner) pScanner->stopScan();
+            server.send(200, "application/json", "{\"ok\":true,\"message\":\"Scan stopped\"}");
+        } else {
+            server.send(400, "application/json", "{\"ok\":false,\"error\":\"Unknown action\"}");
+        }
+    }
+
+    void handleScanResults() {
+        JsonDocument doc;
+        doc["scanning"] = pScanner ? pScanner->scanning : false;
+        doc["done"] = pScanner ? pScanner->scanDone : false;
+
+        JsonArray devArr = doc["devices"].to<JsonArray>();
+        if (pScanner) {
+            for (const auto& d : pScanner->devices) {
+                JsonObject obj = devArr.add<JsonObject>();
+                obj["name"] = d.name;
+                obj["address"] = d.address;
+                obj["rssi"] = d.rssi;
+                obj["appearance"] = d.appearance;
+                obj["services"] = d.services;
+            }
+        }
+
+        String response;
+        serializeJson(doc, response);
+        server.send(200, "application/json", response);
+    }
+
+    void handleScanClone() {
+        if (!server.hasArg("plain")) {
+            server.send(400, "application/json", "{\"ok\":false,\"error\":\"Missing body\"}");
+            return;
+        }
+        JsonDocument doc;
+        DeserializationError err = deserializeJson(doc, server.arg("plain"));
+        if (err) {
+            server.send(400, "application/json", "{\"ok\":false,\"error\":\"Invalid JSON\"}");
+            return;
+        }
+
+        int index = doc["index"] | -1;
+        if (!pScanner || index < 0 || index >= (int)pScanner->devices.size()) {
+            server.send(400, "application/json", "{\"ok\":false,\"error\":\"Invalid device index\"}");
+            return;
+        }
+
+        // Stop scanner if still running
+        if (pScanner->scanning) pScanner->stopScan();
+
+        const ScannedDevice& target = pScanner->devices[index];
+        String cloneName = target.name.length() > 0 ? target.name : "BLE Device";
+        uint16_t cloneAppearance = target.appearance > 0 ? target.appearance : 961;
+
+        if (pBle) {
+            // Clone the target's identity and start advertising
+            pBle->updateConfig(cloneName, cloneAppearance, pBle->duration, pBle->swiftMode);
+            pBle->startAdvertising();
+            addLog("Cloned: " + cloneName + " (0x" + String(cloneAppearance, HEX) + ") -> Advertising");
+        }
+
+        JsonDocument resp;
+        resp["ok"] = true;
+        resp["name"] = cloneName;
+        resp["appearance"] = cloneAppearance;
+        resp["address"] = target.address;
+        String response;
+        serializeJson(resp, response);
+        server.send(200, "application/json", response);
     }
 };
 

@@ -5,13 +5,15 @@
 #include "BleManager.h"
 #include "PayloadRunner.h"
 #include "WifiManager.h"
+#include "BleScanner.h"
 
 class SerialCli {
 public:
-    void begin(BleManager* ble, PayloadRunner* runner, WifiManager* wifi) {
+    void begin(BleManager* ble, PayloadRunner* runner, WifiManager* wifi, BleScanner* scanner = nullptr) {
         pBle = ble;
         pRunner = runner;
         pWifi = wifi;
+        pScanner = scanner;
         printBanner();
     }
 
@@ -32,6 +34,7 @@ private:
     BleManager* pBle = nullptr;
     PayloadRunner* pRunner = nullptr;
     WifiManager* pWifi = nullptr;
+    BleScanner* pScanner = nullptr;
     String inputBuffer;
     bool inCustomScriptMode = false;
     String storedCustomScript = "";
@@ -76,6 +79,13 @@ private:
         Serial.println("  payload run         Execute the stored custom payload");
         Serial.println("  abort               Immediately cancel active payload and release keys");
         Serial.println("  forget              Clear stored Bluetooth pairing bonds");
+        Serial.println("+-------------------------------------------------------------+");
+        Serial.println("| Scanner Commands                                            |");
+        Serial.println("+-------------------------------------------------------------+");
+        Serial.println("  6 / scan            Scan for nearby BLE devices (10s)");
+        Serial.println("  scan <seconds>      Scan with custom duration (3-30s)");
+        Serial.println("  7 / devices         List discovered BLE devices");
+        Serial.println("  clone <n>           Clone identity of scanned device #n");
         Serial.println("+-------------------------------------------------------------+\r\n");
     }
 
@@ -184,6 +194,53 @@ private:
             if (pRunner) pRunner->abort();
         } else if (line.equalsIgnoreCase("forget")) {
             if (pBle) pBle->forgetBonds();
+
+        // --- Scanner commands ---
+        } else if (line == "6" || line.equalsIgnoreCase("scan")) {
+            if (pScanner) {
+                if (pBle && pBle->phase != "idle") pBle->stopAdvertising();
+                pScanner->startScan(10);
+            } else {
+                Serial.println("[CLI] Scanner not available.");
+            }
+        } else if (line.startsWith("scan ")) {
+            uint32_t dur = line.substring(5).toInt();
+            if (dur < 3) dur = 3;
+            if (dur > 30) dur = 30;
+            if (pScanner) {
+                if (pBle && pBle->phase != "idle") pBle->stopAdvertising();
+                pScanner->startScan(dur);
+            }
+        } else if (line == "7" || line.equalsIgnoreCase("devices")) {
+            if (pScanner && pScanner->devices.size() > 0) {
+                Serial.printf("\r\nDiscovered BLE Devices (%d):\r\n", (int)pScanner->devices.size());
+                for (int i = 0; i < (int)pScanner->devices.size(); i++) {
+                    const auto& d = pScanner->devices[i];
+                    Serial.printf("  [%d] %-20s %s  RSSI:%d  App:0x%04X  %s\r\n",
+                        i,
+                        d.name.length() > 0 ? d.name.c_str() : "(unnamed)",
+                        d.address.c_str(), d.rssi, d.appearance,
+                        d.services.length() > 0 ? d.services.c_str() : "");
+                }
+                Serial.println();
+            } else {
+                Serial.println("[CLI] No devices found. Run 'scan' first.");
+            }
+        } else if (line.startsWith("clone ")) {
+            int idx = line.substring(6).toInt();
+            if (pScanner && idx >= 0 && idx < (int)pScanner->devices.size()) {
+                if (pScanner->scanning) pScanner->stopScan();
+                const auto& d = pScanner->devices[idx];
+                String name = d.name.length() > 0 ? d.name : "BLE Device";
+                uint16_t app = d.appearance > 0 ? d.appearance : 961;
+                if (pBle) {
+                    pBle->updateConfig(name, app, pBle->duration, pBle->swiftMode);
+                    pBle->startAdvertising();
+                    Serial.printf("[CLI] Cloned: '%s' (0x%04X). Now advertising.\r\n", name.c_str(), app);
+                }
+            } else {
+                Serial.println("[CLI] Invalid index. Run 'devices' to see available devices.");
+            }
         } else {
             Serial.println("[CLI] Unknown command: '" + line + "'. Type 'help' for command list.");
         }

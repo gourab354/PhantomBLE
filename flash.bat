@@ -19,7 +19,7 @@ pause
 
 echo.
 echo Flashing PhantomBLE firmware to %PORT%...
-python -m esptool --chip esp32 -p %PORT% -b 460800 --before default_reset --after hard_reset write_flash -z --flash_mode dio --flash_freq 40m --flash_size 4MB 0x1000 firmware/esp32_devkit_38pin/bootloader.bin 0x8000 firmware/esp32_devkit_38pin/partitions.bin 0x10000 firmware/esp32_devkit_38pin/firmware.bin
+python -m esptool --chip esp32 -p %PORT% -b 460800 --before default-reset --after hard-reset --connect-attempts 20 write-flash -z --flash_mode dio --flash_freq 40m --flash_size 4MB 0x1000 firmware/esp32_devkit_38pin/bootloader.bin 0x8000 firmware/esp32_devkit_38pin/partitions.bin 0x10000 firmware/esp32_devkit_38pin/firmware.bin
 
 if %ERRORLEVEL% EQU 0 (
     echo.

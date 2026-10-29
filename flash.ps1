@@ -21,7 +21,7 @@ if (-not (Test-Path $firmware)) {
 }
 
 Write-Host "Starting flash procedure via esptool..." -ForegroundColor Cyan
-python -m esptool --chip esp32 -p $Port -b 460800 --before default_reset --after hard_reset write_flash -z --flash_mode dio --flash_freq 40m --flash_size 4MB 0x1000 $bootloader 0x8000 $partitions 0x10000 $firmware
+python -m esptool --chip esp32 -p $Port -b 460800 --before default-reset --after hard-reset --connect-attempts 20 write-flash -z --flash_mode dio --flash_freq 40m --flash_size 4MB 0x1000 $bootloader 0x8000 $partitions 0x10000 $firmware
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host "`n====================================================================" -ForegroundColor Green
