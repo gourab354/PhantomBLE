@@ -1,5 +1,5 @@
 # PhantomBLE
-**Advanced BLE HID Emulation & Swift Pair Injection for ESP32 DevKit (38-Pin)**
+**Advanced BLE HID Emulation & Swift Pair Injection for ESP32 DevKit **
 
 [![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)](https://github.com)
 [![Hardware](https://img.shields.io/badge/Target-ESP32--DevKit%20(38--pin)-green.svg)](https://www.espressif.com)
